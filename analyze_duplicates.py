@@ -5,6 +5,8 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 
 BASE_DIR = Path(r"C:\duplicate checker")
@@ -144,6 +146,26 @@ def duplicate_rows(df: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
     return df.merge(dup_keys, on=keys, how="inner").sort_values(keys + ["source_sheet", "row_number"])
 
 
+def autosize_and_highlight(writer: pd.ExcelWriter, highlighted_sheets: set[str]) -> None:
+    workbook = writer.book
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    header_font = Font(color="FFFFFF", bold=True)
+    duplicate_fill = PatternFill("solid", fgColor="FFF2CC")
+
+    for sheet_name, worksheet in writer.sheets.items():
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+        if sheet_name in highlighted_sheets:
+            for row in worksheet.iter_rows(min_row=2):
+                for cell in row:
+                    cell.fill = duplicate_fill
+        worksheet.freeze_panes = "A2"
+        for column_cells in worksheet.columns:
+            width = min(max(len(str(cell.value or "")) for cell in column_cells) + 2, 45)
+            worksheet.column_dimensions[get_column_letter(column_cells[0].column)].width = width
+
+
 def main() -> None:
     transactions = load_transactions()
     smartcit = load_smartcit()
@@ -198,6 +220,23 @@ def main() -> None:
             how="left",
             suffixes=("", "_smartcit"),
         ).sort_values(["vods_id", "source_sheet", "row_number", "agent_name"])
+
+    duplicate_track_ids_by_sheet = pd.DataFrame()
+    if not actual_duplicates.empty:
+        duplicate_track_ids_by_sheet = (
+            actual_duplicates.groupby("vods_id", dropna=False)
+            .agg(
+                duplicate_rows=("vods_id", "size"),
+                source_sheets=("source_sheet", lambda values: ", ".join(sorted(set(map(str, values))))),
+                accounts=("account_key", lambda values: ", ".join(sorted(set(map(str, values))))),
+                first_date=("transaction_date", "min"),
+                last_date=("transaction_date", "max"),
+                total_amount=("amount", "sum"),
+                devices=("device", lambda values: ", ".join(sorted(set(map(str, values))))),
+            )
+            .reset_index()
+            .sort_values(["duplicate_rows", "vods_id"], ascending=[False, True])
+        )
 
     top_accounts = (
         actual_duplicates.groupby(["account_key", "account_name"], dropna=False)
@@ -269,6 +308,7 @@ def main() -> None:
         smartcit_vods_duplicates.to_excel(writer, index=False, sheet_name="SmartCIT VODS duplicates")
         smartcit_possible_duplicates.to_excel(writer, index=False, sheet_name="SmartCIT possible duplicates")
         smartcit_matched_agents.to_excel(writer, index=False, sheet_name="Matched SmartCIT agents")
+        duplicate_track_ids_by_sheet.to_excel(writer, index=False, sheet_name="2607 duplicated IDs by sheet")
         top_accounts.to_excel(writer, index=False, sheet_name="Top duplicated accounts")
         top_devices.to_excel(writer, index=False, sheet_name="Top duplicate devices")
         top_amounts.to_excel(writer, index=False, sheet_name="Top duplicate amounts")
@@ -277,6 +317,17 @@ def main() -> None:
         smartcit_agent_ranking.to_excel(writer, index=False, sheet_name="SmartCIT agent ranking")
         transactions.to_excel(writer, index=False, sheet_name="Transactions filtered")
         smartcit.to_excel(writer, index=False, sheet_name="SmartCIT filtered")
+        autosize_and_highlight(
+            writer,
+            {
+                "Actual duplicates",
+                "Possible duplicates",
+                "SmartCIT VODS duplicates",
+                "SmartCIT possible duplicates",
+                "Matched SmartCIT agents",
+                "2607 duplicated IDs by sheet",
+            },
+        )
 
     print(summary.to_string(index=False))
     print(f"Report written to: {OUTPUT_FILE}")
