@@ -1,0 +1,8 @@
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.csv
+*.parquet
+__pycache__/
+.streamlit/secrets.toml
